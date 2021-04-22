@@ -7,91 +7,89 @@
 
 #include "floyd_warshall.cuh"
 
-__global__ void ParallelFloydWarshall(int* graph, int n, int* path) {
-	const int block_size = 16;
-	// block indices
-	const int bx = blockIdx.x;
-	const int by = blockIdx.y;
-	const int tx = threadIdx.x;
-	const int ty = threadIdx.y;
+__global__ void floyd_warshall_buffer(int* in_mat, int* in_mat_t,
+const int* in_x, const int* in_y) {
+	const int dx = threadIdx.x;
+	const int dy = threadIdx.y;
+	const int mx = gridDim.x;
+	const int my = gridDim.y;
 
-	const int a_begin = n * block_size * by;
-	const int a_end = a_begin + n - 1;
-	const int a_step = block_size;
-
-	const int b_begin = block_size * bx;
-	const int b_step = block_size * n;
-
-	int pathsub = 0;
-
-	for (int a = a_begin, b = b_begin; a <= a_end; a += a_step, b += b_step) {
-		// Load block into shared memory.
-		int graph_s[block_size][block_size];
-		int path_s[block_size][block_size];
-		graph_s[ty][tx] = graph[a + n * ty + tx];
-		path_s[ty][tx] = path[b + n * ty + tx];
-		__syncthreads();
-
-		// Find minimum for block.
-		for (int k = 0; k < block_size; ++k) {
-			pathsub = graph_s[ty][k] < graph_s[ty][k] + path_s[k][tx] ?
-				graph_s[ty][k] : graph_s[ty][k] + path_s[k][tx];
-		}
-		__syncthreads();
-	}
-	// Writeback.
-	int pathwrite = n * block_size * by + block_size * bx;
-	path[pathwrite + n * ty + tx] = pathsub;
+	int position = dy * mx + dx;
+	int position_t = dx * my + dy;
+	float val1 = in_mat[position];
+	float val2 = in_x[dx] + in_y[dy];
+	in_mat[position] = (val1 < val2) ? val1 : val2;
+	in_mat_t[position_t] = (val1 < val2) ? val1 : val2;
 }
 
-
-int main()
-{
-	// Create graph density will be between 0 and 100,
-	// indication the % of number of directed edges in graph
-	// range will be the range of edge weighting of directed edges.
-
-	const int n = 700;
-	const int density = 25;
-	const int prange = (100 / density);
-	int* graph = (int*)calloc(sizeof(int), n * n);
-	const int range = 1000;
+int main() {
+	const int n = 3;
 	const int infinite = std::numeric_limits<int>::max();
-	for (int i = 0; i < n; i++) {
-		for (int j = 0; j < n; j++) {
-			// Set G[i][i] = 0.
-			if (i == j) {
-				graph[i * n + j] = 0;
-				continue;
-			}
-			int pr = std::rand() % prange;
-			// Set edge random edge weight to random value, or to infinite.
-			graph[i * n + j] = pr == 0 ? ((rand() % range) + 1) : infinite;
-		}
+
+	int* graph = (int*)malloc(n * n * sizeof(int));
+	graph[0] = 0;
+	graph[1] = infinite;
+	graph[2] = 1;
+	graph[3] = 12;
+	graph[4] = 0;
+	graph[5] = 12;
+	graph[6] = 1;
+	graph[7] = 25;
+	graph[8] = 0;
+
+	int* graph_t = (int*)malloc(n * n * sizeof(int));
+	graph_t[0] = 0;
+	graph_t[1] = 12;
+	graph_t[2] = 1;
+	graph_t[3] = infinite;
+	graph_t[4] = 0;
+	graph_t[5] = 25;
+	graph_t[6] = 1;
+	graph_t[7] = 12;
+	graph_t[8] = 0;
+
+	int* path = (int*)calloc(n * n, sizeof(int));
+
+	int* graph_d;
+	int* graph_t_d;
+	int* in_x_d;
+	int* in_y_d;
+	cudaMalloc(&graph_d, n * n * sizeof(int));
+	cudaMalloc(&graph_t_d, n * n * sizeof(int));
+	cudaMalloc(&in_x_d, n * sizeof(int));
+	cudaMalloc(&in_y_d, n * sizeof(int));
+	cudaMemcpy(graph_d, graph, n * n * sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(graph_t_d, graph_t, n * n * sizeof(int), cudaMemcpyHostToDevice);
+
+	const dim3 grid = {n, n, 1};
+	const int block = 9;
+
+	for (int i = 0; i < n; ++i) {
+		// Copy in in_x_d the i line from graph_d. 
+		cudaMemcpy(in_x_d, &graph_d[i * n], n * sizeof(int), cudaMemcpyDeviceToDevice);
+		// Copy in in_y_d the i line from graph_t_d. 
+		cudaMemcpy(in_y_d, &graph_t_d[i * n], n * sizeof(int), cudaMemcpyDeviceToDevice);
+		floyd_warshall_buffer<<<grid, block>>>(graph_d, graph_t_d, in_x_d, in_y_d);
 	}
 
-	int* path = nullptr;
-	
-	int* graph_d;
-	cudaMalloc(&graph_d, n * n);
-	cudaMemcpy(graph_d, graph, n * n, cudaMemcpyHostToDevice);
+	cudaMemcpy(path, graph_d, n * n * sizeof(int), cudaMemcpyDeviceToHost);
 
-	int* path_d;
-	cudaMalloc(&path_d, n * n);
-
-	const int grid = 1;
-	const int block = 1;
-
-	ParallelFloydWarshall <<<grid, block>>> (graph_d, n, path_d);
-
-	cudaMemcpy(path, path_d, n * n, cudaMemcpyDeviceToHost);
-
-	std::cout << path;
+	for (int x = 0; x < n; ++x)
+	{
+		for (int y = 0; y < n; ++y)
+		{
+				std::cout << path[x * n + y];
+				std::cout << " ";
+		}
+		std::cout << "\n";
+	}
 
 	// Free memory.
-	cudaFree(path_d);
+	cudaFree(graph_t_d);
 	cudaFree(graph_d);
-	free(path);
+	cudaFree(in_x_d);
+	cudaFree(in_y_d);
 	free(graph);
+	free(graph_t);
 	return EXIT_SUCCESS;
 }

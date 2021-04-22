@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <cuda.h>
-#include <cuda_runtime.h>/
+#include <cuda_runtime.h>
 
-__global__ void parallel_floyd_warshall(int* graph, int n, int* path);
+__global__ void floyd_warshall_buffer(int* in_mat, int* in_mat_t,
+const int* in_x, const int* in_y);
